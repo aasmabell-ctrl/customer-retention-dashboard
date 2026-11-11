@@ -1,0 +1,152 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>User Visits Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1020;--card:#141b2e;--fg:#eef1f8;--mut:#8d97b0;--acc:#ffb454;--neg:#ff7a85;--line:#252f4a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 600px at 10% -10%,#1d2a4d 0%,transparent 60%),radial-gradient(900px 500px at 110% 0%,#3a2440 0%,transparent 55%),var(--bg);min-height:100vh;color:var(--fg);font-family:'DM Sans',sans-serif}
+main{max-width:1180px;margin:auto;padding:32px 20px}h1{font-family:'Space Grotesk';margin:0;font-size:2rem}
+#takeaway{color:var(--mut);margin:.4rem 0 1.4rem}.ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}
+select,button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:18px}
+.card{background:linear-gradient(160deg,#18213a,var(--card));border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 10px 30px -12px #0008}
+.kpis .card .val{background:linear-gradient(90deg,var(--acc),#ff8a6b);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lbl{color:var(--mut);font-size:.85rem}.val{font-family:'Space Grotesk';font-size:2rem;font-weight:700;margin:.2rem 0}
+.d{font-size:.85rem}.up{color:var(--acc)}.dn{color:var(--neg)}.grid{display:grid;grid-template-columns:1fr 1.4fr;gap:14px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}h2{font-family:'Space Grotesk';font-size:1.05rem;margin:0 0 10px}
+svg text{fill:var(--mut);font-size:11px}.key{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:.8rem;margin-top:8px}
+.key span{cursor:pointer;display:flex;align-items:center;gap:5px}.key i{width:14px;height:3px;display:inline-block}
+.cl{transition:opacity .15s}svg.hov .cl{opacity:.12}svg.hov .cl.on{opacity:1;stroke-width:3.5}
+#tip{position:fixed;pointer-events:none;background:#000c;padding:4px 8px;border-radius:6px;font-size:.8rem;display:none}
+</style></head><body><main>
+<h1>User Visits Dashboard</h1><p id="takeaway">Loading…</p>
+<div class="ctl">From <select id="from"></select> To <select id="to"></select><button id="reset">Reset</button>
+<input type="file" id="file" accept=".csv" style="display:none"><span id="msg" class="lbl"></span></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid"><div class="card"><h2>Active users per month</h2><svg id="c1" viewBox="0 0 460 300" width="100%"></svg></div>
+<div class="card"><h2>Retention by join-month cohort, weeks 1–12</h2><svg id="c2" viewBox="0 0 640 300" width="100%"></svg><div class="key" id="key"></div></div></div>
+<div id="tip"></div></main>
+<script id="calc">
+// Settings named in the brief
+const WEEK_FIRST = 1, WEEK_LAST = 12, N_COHORTS = 12, MIN_USERS = 20, HEADLINE_WEEK = 4;
+// Calendar units
+const DAYS_PER_WEEK = 7, MS_PER_DAY = 864e5, PCT = 100;
+function parseCSV(text){
+  const lines=text.trim().split(/\r?\n/), h=lines.shift().split(',');
+  const ix=k=>h.indexOf(k), u=ix('user_id'), v=ix('visit_date'), d=ix('days_since_joining'), f=ix('first_visit_date');
+  return lines.map(l=>{const c=l.split(',');return {user:c[u],visit:c[v],days:+c[d],first:c[f]};});
+}
+const mon=s=>s.slice(0,s.lastIndexOf('-'));
+const dayNum=s=>Date.parse(s+'T00:00:00Z')/MS_PER_DAY;
+function monthEnd(m){const [y,mm]=m.split('-').map(Number);return dayNum(new Date(Date.UTC(y,mm,0)).toISOString().slice(0,10));}
+function months(rows){return [...new Set(rows.map(r=>mon(r.visit)))].sort();}
+function compute(rows, from, to){
+  const maxDay=Math.max(...rows.map(r=>dayNum(r.visit)));
+  const asOf=Math.min(maxDay, monthEnd(to));
+  const R=rows.filter(r=>dayNum(r.visit)<=asOf);
+  const allM=months(R), view=allM.filter(m=>m>=from&&m<=to);
+  // Active & visits per month
+  const act={}, vis={};
+  for(const r of R){const m=mon(r.visit);(act[m]??=new Set).add(r.user);vis[m]=(vis[m]||0)+1;}
+  const active=view.map(m=>({m,n:act[m]?act[m].size:0,v:vis[m]||0}));
+  // Cohorts
+  const users={};for(const r of R){(users[r.user]??={first:r.first,weeks:new Set}).weeks.add(Math.floor(r.days/DAYS_PER_WEEK));}
+  const coh={};for(const [id,u] of Object.entries(users)){const c=mon(u.first);(coh[c]??={m:c,members:[],lastJoin:-Infinity}).members.push(u);
+    coh[c].lastJoin=Math.max(coh[c].lastJoin,dayNum(u.first));}
+  const fullWeek=(c,w)=>c.lastJoin+DAYS_PER_WEEK*w+DAYS_PER_WEEK-1<=asOf;
+  const cohorts=Object.values(coh).sort((a,b)=>a.m<b.m?-1:1).map(c=>{
+    const ret=[];for(let w=0;w<=WEEK_LAST;w++)ret[w]=fullWeek(c,w)?c.members.filter(u=>u.weeks.has(w)).length/c.members.length:null;
+    return {m:c.m,size:c.members.length,ret,members:c.members,c};});
+  const eligible=cohorts.filter(c=>c.m>=from&&c.m<=to&&c.size>=MIN_USERS&&c.ret[WEEK_FIRST]!==null);
+  const shown=eligible.slice(-N_COHORTS), earlier=eligible.slice(0,-N_COHORTS);
+  let pooled=null;if(earlier.length){pooled=[];for(let w=0;w<=WEEK_LAST;w++){let s=0,n=0;
+    for(const c of earlier)if(c.ret[w]!==null){n+=c.size;s+=c.members.filter(u=>u.weeks.has(w)).length;}pooled[w]=n?s/n:null;}}
+  // Headlines
+  const totalUsers=cohorts.length?cohorts.reduce((a,c)=>a+c.size,0):0;
+  const iT=allM.indexOf(to), prevM=allM[iT-1];
+  const aT=act[to]?act[to].size:0, aP=prevM&&act[prevM]?act[prevM].size:null;
+  const vpa=m=>act[m]&&act[m].size?vis[m]/act[m].size:null;
+  const w4=cohorts.filter(c=>c.size>=MIN_USERS&&c.ret[HEADLINE_WEEK]!==null);
+  const w4L=w4[w4.length-1]||null, w4P=w4[w4.length-2]||null;
+  return {asOf,view,active,cohorts:cohorts.map(({m,size,ret})=>({m,size,ret})),shown:shown.map(({m,size,ret})=>({m,size,ret})),pooled,earlierCount:earlier.length,
+    head:{to,prevM,totalUsers,activeTo:aT,activePrev:aP,activePct:aP?(aT-aP)/aP*PCT:null,
+      w4Cohort:w4L&&w4L.m,w4:w4L&&w4L.ret[HEADLINE_WEEK]*PCT,w4PrevCohort:w4P&&w4P.m,w4pp:w4L&&w4P?(w4L.ret[HEADLINE_WEEK]-w4P.ret[HEADLINE_WEEK])*PCT:null,
+      vpa:vpa(to),vpaPrev:prevM?vpa(prevM):null}};
+}
+function validate(rows,r){
+  const D=new Set(rows.filter(x=>dayNum(x.first)<=r.asOf).map(x=>x.user)).size, sum=r.cohorts.reduce((a,c)=>a+c.size,0);
+  const last={};for(const x of rows){const d=dayNum(x.first);if(d<=r.asOf){const c=mon(x.first);last[c]=Math.max(last[c]??-Infinity,d);}}
+  const done=(c,w)=>last[c.m]+DAYS_PER_WEEK*w+DAYS_PER_WEEK-1<=r.asOf;
+  const w0Bad=r.cohorts.filter(c=>done(c,0)&&c.ret[0]!==1).map(c=>c.m), w0N=r.cohorts.filter(c=>done(c,0)).length;
+  const nullBad=[];let inc=0;for(const c of r.cohorts)for(let w=0;w<=WEEK_LAST;w++)if(!done(c,w)){inc++;if(c.ret[w]!==null)nullBad.push(c.m+' W'+w);}
+  const t=[{name:'Cohort sizes sum = distinct users up to To',pass:sum===D&&sum===r.head.totalUsers,detail:`cohort sum ${sum}, distinct users ${D}, KPI ${r.head.totalUsers}`},
+    {name:'Week-0 retention = 100% for complete cohorts',pass:!w0Bad.length,detail:`${w0N} complete cohorts checked`+(w0Bad.length?`, failing: ${w0Bad.join(', ')}`:'')},
+    {name:'Incomplete retention windows are null',pass:!nullBad.length,detail:`${inc} incomplete windows checked`+(nullBad.length?`, non-null: ${nullBad.join(', ')}`:'')}];
+  return {pass:t.every(x=>x.pass),tests:t};
+}
+if(typeof module!=='undefined')module.exports={parseCSV,compute,months,validate};
+</script>
+<script>
+const $=id=>document.getElementById(id);let ROWS=[],ALL=[];
+const fmt=(x,d)=>x==null?'–':x.toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:d});
+const sgn=x=>x>0?'+':'';
+const delta=(x,suf,d)=>x==null?'<span class="d lbl">no prior month</span>':`<span class="d ${x>=0?'up':'dn'}">${sgn(x)}${fmt(x,d)}${suf}</span>`;
+function kpi(l,v,dl){return `<div class="card"><div class="lbl">${l}</div><div class="val">${v}</div>${dl}</div>`;}
+function render(){
+  const from=$('from').value,to=$('to').value;if(from>to){$('msg').textContent='From must be on or before To';return;}$('msg').textContent='';
+  const r=compute(ROWS,from,to),h=r.head;
+  $('kpis').innerHTML=kpi('Total users (joined by '+to+')',fmt(h.totalUsers,0),'<span class="d lbl">cohort sum check: '+(r.cohorts.reduce((a,c)=>a+c.size,0)===h.totalUsers?'✓':'✗')+'</span>')
+   +kpi('Active users, '+to,fmt(h.activeTo,0),delta(h.activePct,'% vs '+(h.prevM||'—'),1))
+   +kpi('Week-'+HEADLINE_WEEK+' retention, '+(h.w4Cohort||'—')+' cohort',h.w4==null?'–':fmt(h.w4,1)+'%',delta(h.w4pp,' pp vs '+(h.w4PrevCohort||'—'),1))
+   +kpi('Visits per active user, '+to,fmt(h.vpa,2),delta(h.vpa!=null&&h.vpaPrev!=null?h.vpa-h.vpaPrev:null,' vs '+(h.prevM||'—'),2));
+  const dir=h.activePct==null?'':h.activePct>=0?`grew ${fmt(h.activePct,1)}%`:`fell ${fmt(-h.activePct,1)}%`;
+  $('takeaway').textContent=`In ${to}, ${fmt(h.activeTo,0)} of ${fmt(h.totalUsers,0)} users were active${dir?' ('+dir+' on '+h.prevM+')':''}, and the ${h.w4Cohort||'latest'} cohort kept ${h.w4==null?'–':fmt(h.w4,1)+'%'} of users in week ${HEADLINE_WEEK}.`;
+  const v=validate(ROWS,r);console.groupCollapsed(`[Dashboard Validation] ${from} → ${to}: ${v.pass?'ALL PASS':'FAIL'}`);
+  v.tests.forEach(x=>(x.pass?console.info:console.error)(`${x.pass?'PASS':'FAIL'} – ${x.name} (${x.detail})`));console.groupEnd();
+  lineChart(r.active);retChart(r);
+}
+const S='http://www.w3.org/2000/svg';
+function el(t,a,p){const e=document.createElementNS(S,t);for(const k in a)e.setAttribute(k,a[k]);p&&p.appendChild(e);return e;}
+function axes(svg,W,H,P,ymax,ylab,xs,xlab){
+  const n=Math.max(...[ymax].map(()=>4));for(let i=0;i<=n;i++){const y=H-P-(H-P-P/2)*i/n;el('line',{x1:P,x2:W-P/2,y1:y,y2:y,stroke:'#252f4a'},svg);
+    el('text',{x:P-6,y:y+4,'text-anchor':'end'},svg).textContent=ylab(ymax*i/n);}
+  xs.forEach((x,i)=>{const t=el('text',{x,y:H-P+16,'text-anchor':'middle'},svg);t.textContent=xlab(i);});
+}
+function lineChart(d){
+  const svg=$('c1');svg.innerHTML='';const W=460,H=300,P=44,ymax=Math.max(...d.map(x=>x.n))||1;
+  const X=i=>P+(W-P*1.5)*(d.length>1?i/(d.length-1):.5),Y=v=>H-P-(H-P*1.5)*v/ymax;
+  const step=Math.ceil(d.length/6);
+  axes(svg,W,H,P,ymax,v=>Math.round(v),d.map((_,i)=>X(i)),i=>i%step?'':d[i].m);
+  svg.querySelectorAll('text').forEach(t=>{if(t.textContent==='')t.remove();});
+  el('path',{d:d.map((x,i)=>(i?'L':'M')+X(i)+','+Y(x.n)).join(''),fill:'none',stroke:'#ffb454','stroke-width':2.5},svg);
+  d.forEach((x,i)=>{const c=el('circle',{cx:X(i),cy:Y(x.n),r:3,fill:'#ffb454'},svg);tip(c,`${x.m}: ${x.n} active`);});
+}
+function tip(e,t){e.addEventListener('mousemove',ev=>{const T=$('tip');T.style.display='block';T.style.left=ev.clientX+12+'px';T.style.top=ev.clientY+12+'px';T.textContent=t;});
+  e.addEventListener('mouseleave',()=>$('tip').style.display='none');}
+function retChart(r){
+  const svg=$('c2');svg.innerHTML='';$('key').innerHTML='';const W=640,H=300,P=44;
+  const X=w=>P+(W-P*1.5)*(w-WEEK_FIRST)/(WEEK_LAST-WEEK_FIRST);
+  const series=r.shown.map(c=>c.ret.slice(WEEK_FIRST)).concat(r.pooled?[r.pooled.slice(WEEK_FIRST)]:[]).flat().filter(v=>v!=null);
+  const ymax=Math.max(...series,Number.EPSILON);const Y=v=>H-P-(H-P*1.5)*v/ymax;
+  const ws=[];for(let w=WEEK_FIRST;w<=WEEK_LAST;w++)ws.push(w);
+  axes(svg,W,H,P,ymax,v=>Math.round(v*PCT)+'%',ws.map(X),i=>'W'+ws[i]);
+  const path=ret=>{let s='',pen=false;ws.forEach(w=>{const v=ret[w];if(v==null){pen=false;return;}s+=(pen?'L':'M')+X(w)+','+Y(v);pen=true;});return s;};
+  const n=r.shown.length,items=[];
+  if(r.pooled)items.push({lab:`Earlier (${r.earlierCount} cohorts, pooled)`,ret:r.pooled,col:'#8d97b0',dash:'6 4'});
+  r.shown.forEach((c,i)=>{const t=n>1?i/(n-1):1;items.push({lab:`${c.m} (n=${c.size})`,ret:c.ret,col:`hsl(${Math.round(210+t*(375-210))%360} ${Math.round(45+t*(95-45))}% ${Math.round(55+t*(65-55))}%)`});});
+  items.forEach(it=>{const g=el('g',{class:'cl'},svg);
+    el('path',{d:path(it.ret),fill:'none',stroke:it.col,'stroke-width':2,'stroke-dasharray':it.dash||''},g);
+    el('path',{d:path(it.ret),fill:'none',stroke:'transparent','stroke-width':12},g);
+    ws.forEach(w=>{if(it.ret[w]!=null)tip(el('circle',{cx:X(w),cy:Y(it.ret[w]),r:2.5,fill:it.col},g),`${it.lab} · W${w}: ${fmt(it.ret[w]*PCT,1)}%`);});
+    const k=document.createElement('span');k.innerHTML=`<i style="background:${it.col}"></i>${it.lab}`;$('key').appendChild(k);
+    const on=()=>{svg.classList.add('hov');g.classList.add('on');},off=()=>{svg.classList.remove('hov');g.classList.remove('on');};
+    g.addEventListener('mouseenter',on);g.addEventListener('mouseleave',off);k.addEventListener('mouseenter',on);k.addEventListener('mouseleave',off);});
+}
+function init(text){ROWS=parseCSV(text);ALL=months(ROWS);
+  for(const s of ['from','to'])$(s).innerHTML=ALL.map(m=>`<option>${m}</option>`).join('');
+  reset();}
+function reset(){$('from').value=ALL[0];$('to').value=ALL[ALL.length-1];render();}
+$('from').onchange=$('to').onchange=render;$('reset').onclick=reset;
+fetch('user_visits.csv').then(r=>{if(!r.ok)throw 0;return r.text();}).then(init).catch(()=>{$('takeaway').textContent='Could not auto-load user_visits.csv — choose the file:';$('file').style.display='';});
+$('file').onchange=e=>e.target.files[0].text().then(init);
+</script></body></html>
