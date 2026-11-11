@@ -36,3 +36,7 @@ The dataset contains visit and joining dates, but no customer demographics, mark
 
 ## Development & Acknowledgements
 Created as part of the Exactimo SQL and Visualisation Bootcamp. Lovable AI generated the initial dashboard implementation. My contribution included testing the controls, reviewing calculation logic, requesting and reviewing validation checks, interpreting results and developing business recommendations. Course exercise and training data credited to Exactimo.
+
+### [View the Live Interactive Dashboard](https://customer-retention-analytics.lovable.app)
+
+Explore the monthly activity trends, compare cohort retention curves and use the date filters to investigate customer engagement.
